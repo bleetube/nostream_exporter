@@ -4,5 +4,6 @@ __pycache__/
 *.pyc
 *.egg-info/
 dist/
+tmp.py
 
 .env

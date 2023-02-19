@@ -14,10 +14,39 @@ REQUEST_TIME = Summary('request_processing_seconds', 'Time spent processing requ
 class NostreamCollector(object):
     def __init__(self) -> None:
         '''Read environment variables.'''
-        self.host=environ.get("DB_HOST") or quit( "Error: DB_HOST environment variable is required." )
-        self.database=environ.get("DB_NAME") or quit( "Error: DB_NAME environment variable is required." )
-        self.user=environ.get("DB_USER") or quit( "Error: DB_USER environment variable is required." )
-        self.password=environ.get("DB_PASSWORD") or quit( "Error: DB_PASSWORD environment variable is required." )
+        self.host=environ.get("DB_HOST") or exit( "Error: DB_HOST environment variable is required." )
+        self.database=environ.get("DB_NAME") or exit( "Error: DB_NAME environment variable is required." )
+        self.user=environ.get("DB_USER") or exit( "Error: DB_USER environment variable is required." )
+        self.password=environ.get("DB_PASSWORD") or exit( "Error: DB_PASSWORD environment variable is required." )
+
+    def get_relay_metrics(self) -> dict:
+        '''Query postgresql to get relay metrics.'''
+        metrics = {}
+        conn = psycopg2.connect(
+            host=self.host,
+            database=self.database,
+            user=self.user,
+            password=self.password
+        )
+        select_event_count = "select count(id) from events;"
+        select_top_event_kinds = "select event_kind, count(id) as count from events group by event_kind order by count(id) desc limit 5;"
+        all_time_top_talker_pubkeys = "select encode(event_pubkey, 'hex'), count(id) from events group by encode(event_pubkey, 'hex') order by count(id) desc limit 10;"
+        recent_top_talker_pubkeys = "select encode(event_pubkey, 'hex'), count(id) from events WHERE first_seen >= CURRENT_DATE - INTERVAL '3 days' group by encode(event_pubkey, 'hex') order by count(id) desc limit 10;"
+
+        cur = conn.cursor()
+        cur.execute(select_event_count)
+        results = cur.fetchall()
+        metrics['event_count'] = results[0][0]
+        return metrics
+
+    @REQUEST_TIME.time()
+    def collect(self):
+        relay_metrics = self.get_relay_metrics()
+        try:
+            yield GaugeMetricFamily('total_events', 'Total count of events seen by the relay', value=relay_metrics['event_count'] )
+
+        except Exception as e:
+            exit( f"Exception: \n{e}")
 
 def main():
     '''Start the prometheus client child process and register the NostreamCollector to it.'''
