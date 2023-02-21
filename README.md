@@ -1,5 +1,7 @@
 # Prometheus openmetrics for Nostream
 
+![events by kind](docs/screenshot-01.png)
+
 A devops component for directly monitoring your [nostream relay](https://github.com/Cameri/nostream), which can be integrated with your self-hosted SRE stack. If you don't have a monitoring system set up already, this won't be useful to you. It's basically a python script that runs Postregsql queries to compile basic metrics.
 
 ## Installation and Usage
