@@ -50,6 +50,16 @@ Confirm that it is serving metrics:
 
 ```bash
 curl http://127.0.0.1:9101/metrics
+...
+# HELP events Count of events by kind
+# TYPE events gauge
+events{kind="7"} 48184.0
+events{kind="1"} 24659.0
+events{kind="6"} 3737.0
+events{kind="1984"} 3236.0
+events{kind="4"} 2265.0
+events{kind="other"} 762.0
+
 ```
 
 ## Development

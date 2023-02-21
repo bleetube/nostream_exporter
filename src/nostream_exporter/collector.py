@@ -19,8 +19,12 @@ class NostreamCollector(object):
         self.user=environ.get("DB_USER") or exit( "Error: DB_USER environment variable is required." )
         self.password=environ.get("DB_PASSWORD") or exit( "Error: DB_PASSWORD environment variable is required." )
 
-    def get_relay_metrics(self) -> dict:
-        '''Query postgresql to get relay metrics.'''
+    # TODO: refactor database connection 
+    def get_event_counts(self) -> dict:
+        '''
+        Query postgresql to get relay metrics.
+        @returns a list of tuples with the event kind and count.
+        '''
         metrics = {}
         conn = psycopg2.connect(
             host=self.host,
@@ -28,22 +32,47 @@ class NostreamCollector(object):
             user=self.user,
             password=self.password
         )
-        select_event_count = "select count(id) from events;"
-        select_top_event_kinds = "select event_kind, count(id) as count from events group by event_kind order by count(id) desc limit 5;"
-        all_time_top_talker_pubkeys = "select encode(event_pubkey, 'hex'), count(id) from events group by encode(event_pubkey, 'hex') order by count(id) desc limit 10;"
-        recent_top_talker_pubkeys = "select encode(event_pubkey, 'hex'), count(id) from events WHERE first_seen >= CURRENT_DATE - INTERVAL '3 days' group by encode(event_pubkey, 'hex') order by count(id) desc limit 10;"
+
+        # We do not want metrics for all possible event types because it compounds our cardinality.
+        # See: https://www.robustperception.io/cardinality-is-key/
+        # TODO: make this configurable
+        event_kinds= "7,1,6,1984,4,3,9735"
+        # 7: Reaction (nip-25)
+        # 1: Short Text Note
+        # 6: Reposts (nip-18)
+        # 1984: Reporting (nip-56)
+        # 4: Encrypted Direct Messages (nip-04)
+        # 3: Contacts (nip-02)
+        # 9735: Zap (nip-57)
+        select_configured_event_kinds = f"select event_kind, count(id) as count from events where event_kind in ({event_kinds}) group by event_kind order by count(id) desc limit 5;"
+        select_other_event_kinds = f"select count(id) from events where event_kind not in ({event_kinds}) ;"
+        
+#       all_time_top_talker_pubkeys = "select encode(event_pubkey, 'hex'), count(id) from events group by encode(event_pubkey, 'hex') order by count(id) desc limit 10;"
+#       recent_top_talker_pubkeys = "select encode(event_pubkey, 'hex'), count(id) from events WHERE first_seen >= CURRENT_DATE - INTERVAL '3 days' group by encode(event_pubkey, 'hex') order by count(id) desc limit 10;"
 
         cur = conn.cursor()
-        cur.execute(select_event_count)
-        results = cur.fetchall()
-        metrics['event_count'] = results[0][0]
-        return metrics
+        cur.execute(select_configured_event_kinds)
+        event_counts = cur.fetchall()
+        cur.execute(select_other_event_kinds)
+        count_other_events = cur.fetchall()
+        other_events_count = ('other', count_other_events[0][0])
+        event_counts.append(other_events_count)
+        return event_counts
 
     @REQUEST_TIME.time()
     def collect(self):
-        relay_metrics = self.get_relay_metrics()
+        event_counts = self.get_event_counts()
         try:
-            yield GaugeMetricFamily('total_events', 'Total count of events seen by the relay', value=relay_metrics['event_count'] )
+#           yield GaugeMetricFamily('total_events', 'Total count of events seen by the relay', value=relay_metrics['event_count'] )
+            # Labels and values are mutually exclusive.
+            g = GaugeMetricFamily( "events", "Count of events by kind", labels=[ "kind" ])
+            for event in event_counts:
+                event_kind = event[0]
+                event_count = event[1]
+                g.add_metric([ 
+                    str(event_kind), 
+                ],event_count)
+            yield g
 
         except Exception as e:
             exit( f"Exception: \n{e}")
@@ -53,7 +82,7 @@ def main():
 
     # Optional environment variable to set the bind options.
     if environ.get("METRICS_PORT"):
-        METRICS_PORT = environ.get("METRICS_PORT")
+        METRICS_PORT = int(environ.get("METRICS_PORT"))
     else:
         METRICS_PORT = 9101
     if environ.get("METRICS_BIND"):
