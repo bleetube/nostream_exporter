@@ -18,52 +18,64 @@ class NostreamCollector(object):
         self.database=environ.get("DB_NAME") or exit( "Error: DB_NAME environment variable is required." )
         self.user=environ.get("DB_USER") or exit( "Error: DB_USER environment variable is required." )
         self.password=environ.get("DB_PASSWORD") or exit( "Error: DB_PASSWORD environment variable is required." )
+        self.conn = None
 
-    # TODO: refactor database connection 
-    def get_event_counts(self) -> dict:
-        '''
-        Query postgresql to get relay metrics.
-        @returns a list of tuples with the event kind and count.
-        '''
-        metrics = {}
-        conn = psycopg2.connect(
+    def database_connection(self):
+        return psycopg2.connect(
             host=self.host,
             database=self.database,
             user=self.user,
             password=self.password
         )
 
-        # We do not want metrics for all possible event types because it compounds our cardinality.
-        # See: https://www.robustperception.io/cardinality-is-key/
-        # TODO: make this configurable
+    def query_database(self, select_query: str, conn):
+        '''
+        Query postgresql to get relay metrics.
+        @returns a list of tuples with the event kind and count.
+        '''
+        cur = conn.cursor()
+        cur.execute(select_query)
+        return cur.fetchall()
+
+    def get_event_counts(self) -> dict:
+        '''
+        Default event kinds we want to track:
+        7: Reaction (nip-25)
+        1: Short Text Note
+        6: Reposts (nip-18)
+        1984: Reporting (nip-56)
+        4: Encrypted Direct Messages (nip-04)
+        3: Contacts (nip-02)
+        9735: Zap (nip-57)
+        We do not want metrics for all possible event types because it compounds our cardinality.
+        See: https://www.robustperception.io/cardinality-is-key/
+        TODO: make this configurable
+        '''
         event_kinds= "7,1,6,1984,4,3,9735"
-        # 7: Reaction (nip-25)
-        # 1: Short Text Note
-        # 6: Reposts (nip-18)
-        # 1984: Reporting (nip-56)
-        # 4: Encrypted Direct Messages (nip-04)
-        # 3: Contacts (nip-02)
-        # 9735: Zap (nip-57)
         select_configured_event_kinds = f"select event_kind, count(id) as count from events where event_kind in ({event_kinds}) group by event_kind order by count(id) desc limit 5;"
         select_other_event_kinds = f"select count(id) from events where event_kind not in ({event_kinds}) ;"
         
 #       all_time_top_talker_pubkeys = "select encode(event_pubkey, 'hex'), count(id) from events group by encode(event_pubkey, 'hex') order by count(id) desc limit 10;"
 #       recent_top_talker_pubkeys = "select encode(event_pubkey, 'hex'), count(id) from events WHERE first_seen >= CURRENT_DATE - INTERVAL '3 days' group by encode(event_pubkey, 'hex') order by count(id) desc limit 10;"
 
-        cur = conn.cursor()
-        cur.execute(select_configured_event_kinds)
-        event_counts = cur.fetchall()
-        cur.execute(select_other_event_kinds)
-        count_other_events = cur.fetchall()
+        event_counts = self.query_database(select_configured_event_kinds, self.conn)
+        count_other_events = self.query_database(select_other_event_kinds, self.conn)
         other_events_count = ('other', count_other_events[0][0])
         event_counts.append(other_events_count)
         return event_counts
+    
+    def get_admitted_user_count(self):
+        select_admitted_count = "select count(pubkey) from users where is_admitted is true;"
+        admitted_count = self.query_database(select_admitted_count, self.conn)
+        return admitted_count[0][0]
 
     @REQUEST_TIME.time()
     def collect(self):
+        self.conn = self.database_connection()
         event_counts = self.get_event_counts()
+#       self.conn.close()
         try:
-#           yield GaugeMetricFamily('total_events', 'Total count of events seen by the relay', value=relay_metrics['event_count'] )
+            yield GaugeMetricFamily('admitted_users', 'Total count of users that have paid admission fees to register and use the relay.', value=self.get_admitted_user_count() )
             # Labels and values are mutually exclusive.
             g = GaugeMetricFamily( "events", "Count of events by kind", labels=[ "kind" ])
             for event in event_counts:
