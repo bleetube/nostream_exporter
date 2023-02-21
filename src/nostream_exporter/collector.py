@@ -69,6 +69,12 @@ class NostreamCollector(object):
         admitted_count = self.query_database(select_admitted_count, self.conn)
         return admitted_count[0][0]
 
+    def get_sats_paid_count(self):
+        select_sats = "select sum(balance) from users where is_admitted is true;"
+        millisats = self.query_database(select_sats, self.conn)
+        sats = millisats[0][0]/1000
+        return sats
+
     @REQUEST_TIME.time()
     def collect(self):
         self.conn = self.database_connection()
@@ -76,6 +82,7 @@ class NostreamCollector(object):
 #       self.conn.close()
         try:
             yield GaugeMetricFamily('admitted_users', 'Total count of users that have paid admission fees to register and use the relay.', value=self.get_admitted_user_count() )
+            yield GaugeMetricFamily('sats', 'Total balance of sats paid by users.', value=self.get_sats_paid_count() )
             # Labels and values are mutually exclusive.
             g = GaugeMetricFamily( "events", "Count of events by kind", labels=[ "kind" ])
             for event in event_counts:
